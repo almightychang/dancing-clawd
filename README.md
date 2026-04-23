@@ -1,5 +1,7 @@
 # dancing-clawd
 
+![demo](demo.gif)
+
 A tiny toy that turns Claude Code hook events into dancing mascots in your
 terminal. Each session spawns one Claude that random-walks the screen, tinted
 by its current mood (idle / working / tool running / error / needs-you /
@@ -20,19 +22,15 @@ cd dancing-clawd
 ./install.sh
 ```
 
-The installer is idempotent and:
+The installer:
 
 1. Copies `hook.py`, `dance.py`, and `mascot_frames.py` into
-   `~/.claude/dancing-claude/` (skipped if you run the script from that
-   directory directly).
+   `~/.claude/dancing-claude/`.
 2. Backs up `~/.claude/settings.json` as `settings.json.bak.<timestamp>`
    before any change.
 3. Wires six Claude Code hooks (`UserPromptSubmit`, `PreToolUse`,
    `PostToolUse`, `Notification`, `Stop`, `SubagentStop`) to run `hook.py`.
    Existing hook entries from other tools are preserved.
-
-Re-run `./install.sh` at any time to pick up updated files — already-wired
-hooks are detected and left alone.
 
 ## Run
 
