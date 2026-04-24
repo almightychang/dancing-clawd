@@ -20,6 +20,7 @@ import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_user_name, prompt_user_name
 from mascot_frames import FRAMES_BY_MOOD, FRAME_COLS, FRAME_PX_ROWS, FRAME_ROWS
 
 STATE = Path.home() / ".claude" / "dancing-claude" / "state.json"
@@ -281,7 +282,19 @@ def build_bubble_at(text: str, anchor_col: int, anchor_row: int, w: int, h: int)
     return cells
 
 
+def ensure_user_name() -> str:
+    """Return the configured user name; prompt for one on first run."""
+    name = get_user_name()
+    if name:
+        return name
+    if not sys.stdin.isatty():
+        return ""
+    print("First run — let's save a name for your mascots' speech bubbles.")
+    return prompt_user_name()
+
+
 def main() -> int:
+    ensure_user_name()
     sys.stdout.write(HIDE + CLEAR)
     sys.stdout.flush()
 

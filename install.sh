@@ -15,7 +15,7 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DIR="${HOME}/.claude/dancing-claude"
 SETTINGS="${HOME}/.claude/settings.json"
 HOOK_CMD="python3 ${DEST_DIR}/hook.py"
-FILES=(hook.py dance.py mascot_frames.py)
+FILES=(hook.py dance.py mascot_frames.py config.py)
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

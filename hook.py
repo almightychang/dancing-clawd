@@ -25,6 +25,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_user_name
+
 STATE_DIR = Path.home() / ".claude" / "dancing-claude"
 STATE = STATE_DIR / "state.json"
 LOCK = STATE_DIR / "state.lock"
@@ -101,7 +104,8 @@ def handle(event: dict, state: dict, now: float) -> bool:
 
     if name == "UserPromptSubmit":
         prompt = trunc(event.get("prompt", ""), 56)
-        set_mood(session, "working", now, bubble=f"Sam: {prompt}" if prompt else "thinking…")
+        user = get_user_name() or "you"
+        set_mood(session, "working", now, bubble=f"{user}: {prompt}" if prompt else "thinking…")
     elif name == "PreToolUse":
         tool = event.get("tool_name", "")
         ti = event.get("tool_input", {}) or {}

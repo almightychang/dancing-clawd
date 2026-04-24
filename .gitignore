@@ -3,3 +3,4 @@ __pycache__/
 state.json
 state.lock
 settings.json.bak.*
+config.json
