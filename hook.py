@@ -77,7 +77,7 @@ def tool_hint(tool: str, tool_input: dict) -> str:
         return trunc(tool_input.get("query", ""))
     if tool in ("Grep", "Glob"):
         return trunc(tool_input.get("pattern", ""))
-    if tool == "Task":
+    if tool in ("Task", "Agent"):
         return trunc(tool_input.get("description", "subagent"))
     return ""
 
@@ -110,7 +110,7 @@ def handle(event: dict, state: dict, now: float) -> bool:
         tool = event.get("tool_name", "")
         ti = event.get("tool_input", {}) or {}
         hint = tool_hint(tool, ti)
-        if tool == "Task":
+        if tool in ("Task", "Agent"):
             session["subagent_count"] = int(session.get("subagent_count", 0) or 0) + 1
             set_mood(session, "working", now, bubble=f"spawning: {hint}" if hint else "spawning subagent")
         else:
@@ -120,6 +120,10 @@ def handle(event: dict, state: dict, now: float) -> bool:
         tool = event.get("tool_name", "")
         resp = event.get("tool_response", {}) or {}
         is_error = bool(resp.get("is_error")) if isinstance(resp, dict) else False
+        # Agent tool ending (success, error, or user-kill) is the canonical
+        # decrement signal — SubagentStop only fires on natural completion.
+        if tool in ("Task", "Agent"):
+            session["subagent_count"] = max(0, int(session.get("subagent_count", 0) or 0) - 1)
         if is_error:
             set_mood(session, "error", now, bubble=f"{tool} failed")
         else:
@@ -130,7 +134,8 @@ def handle(event: dict, state: dict, now: float) -> bool:
     elif name == "Stop":
         set_mood(session, "done", now, bubble="all done")
     elif name == "SubagentStop":
-        session["subagent_count"] = max(0, int(session.get("subagent_count", 0) or 0) - 1)
+        # Decrement happens in PostToolUse(Agent); ignore to avoid double-count.
+        pass
     else:
         return False
 

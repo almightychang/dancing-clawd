@@ -9,6 +9,7 @@ Run in a spare terminal while you work:
     python3 ~/.claude/dancing-claude/dance.py
 """
 
+import hashlib
 import json
 import math
 import os
@@ -53,6 +54,24 @@ BG_RESET = "\033[49m"
 
 DANCER_W = FRAME_COLS      # 16 pixel cols = 16 terminal cols
 DANCER_H = FRAME_ROWS      # 8 terminal rows (16 pixel rows via half-block)
+TAG_ROW = 1                # 1 row below sprite for the family-name label
+
+# Friendly family names — one per session, deterministic from sid.
+NAME_POOL = (
+    "Bonnie", "Clyde", "Daisy", "Eddie", "Fiona", "Gus", "Hazel", "Iggy",
+    "Juno", "Kira", "Leo", "Mabel", "Nico", "Olive", "Pip", "Quinn",
+    "Ruby", "Sage", "Toby", "Uma", "Vera", "Wren", "Xander", "Yuki",
+    "Zane", "Aspen", "Birdie", "Cleo", "Dash", "Echo", "Finn", "Goose",
+    "Honey", "Indy", "Jax", "Koda", "Luna", "Milo", "Nala", "Otis",
+    "Poppy", "Remy", "Suki", "Theo", "Vex", "Willow", "Beau", "Coco",
+    "Dax", "Elsa", "Fern", "Gigi", "Hugo", "Iris", "Jude", "Kit",
+    "Lulu", "Moss", "Niko", "Opal", "Pax", "Quill", "Roo", "Skye",
+)
+
+
+def name_for(sid: str) -> str:
+    h = int(hashlib.md5(sid.encode("utf-8")).hexdigest(), 16)
+    return NAME_POOL[h % len(NAME_POOL)]
 
 
 def _color_of(px: int, body_idx: int) -> int:
@@ -62,21 +81,28 @@ def _color_of(px: int, body_idx: int) -> int:
     return body_idx
 
 
-def render_sprite_cells(frame, body_idx: int):
+def render_sprite_cells(frame, body_idx: int, scale: int = 1):
     """Render a 16×16 pixel frame as half-block terminal cells.
 
+    scale=1 → full size (FRAME_COLS cols × FRAME_ROWS rows).
+    scale=2 → half size by sampling every 2nd pixel (subagent dancers).
+
     Returns list of (row_offset, col_offset, ansi_text, visible_width) for each
-    contiguous opaque run.  row_offset is 0..7, col_offset is 0..15.
+    contiguous opaque run.
     """
+    n_cols = FRAME_COLS // scale
+    n_rows = FRAME_ROWS // scale
+    step_px = 2 * scale  # pixel rows consumed per terminal row
     runs: list[tuple[int, int, str, int]] = []
-    for ty in range(FRAME_ROWS):
-        py_top = ty * 2
-        py_bot = py_top + 1
+    for ty in range(n_rows):
+        py_top = ty * step_px
+        py_bot = py_top + scale
         run_start_col = None
         run_chars: list[str] = []
-        for x in range(FRAME_COLS):
-            top = frame[py_top][x]
-            bot = frame[py_bot][x] if py_bot < FRAME_PX_ROWS else 0
+        for x in range(n_cols):
+            sx = x * scale
+            top = frame[py_top][sx] if py_top < FRAME_PX_ROWS else 0
+            bot = frame[py_bot][sx] if py_bot < FRAME_PX_ROWS else 0
             if top == 0 and bot == 0:
                 if run_start_col is not None:
                     runs.append((ty, run_start_col, "".join(run_chars) + RESET,
@@ -192,11 +218,20 @@ def term_size() -> tuple[int, int]:
 class Dancer:
     __slots__ = ("sid", "idx", "x", "y", "vx", "vy", "prev_cells", "tick_offset")
 
-    def __init__(self, sid: str, idx: int, w: int, h: int):
+    def __init__(self, sid: str, idx: int, w: int, h: int,
+                 near: tuple[float, float] | None = None):
         self.sid = sid
         self.idx = idx  # 0 = session main, 1+ = subagent
-        self.x = random.uniform(0, max(1, w - DANCER_W))
-        self.y = random.uniform(0, max(1, h - DANCER_H - 1))
+        y_max = max(1, h - DANCER_H - 1 - TAG_ROW)
+        x_max = max(1, w - DANCER_W)
+        if near is not None:
+            # Subagents spawn within ~half-screen radius of parent.
+            self.x = max(0, min(x_max, near[0] + random.uniform(-DANCER_W, DANCER_W)))
+            self.y = max(0, min(y_max, near[1] + random.uniform(-DANCER_H * 0.5,
+                                                                 DANCER_H * 0.5)))
+        else:
+            self.x = random.uniform(0, x_max)
+            self.y = random.uniform(0, y_max)
         angle = random.uniform(0, 2 * math.pi)
         speed = random.uniform(0.35, 0.7)
         self.vx = math.cos(angle) * speed
@@ -204,7 +239,9 @@ class Dancer:
         self.prev_cells: list[tuple[int, int, int]] = []
         self.tick_offset = random.randint(0, 7)
 
-    def step(self, w: int, h: int, frozen: bool) -> None:
+    def step(self, w: int, h: int, frozen: bool,
+             parent: "Dancer | None" = None,
+             others: "list[Dancer] | tuple[Dancer, ...]" = ()) -> None:
         if frozen:
             return
         if random.random() < 0.05:
@@ -212,10 +249,32 @@ class Dancer:
             mag = random.uniform(0.15, 0.45)
             self.vx += math.cos(ang) * mag
             self.vy += math.sin(ang) * mag * 0.5
-            s = math.hypot(self.vx, self.vy * 2)
-            if s > 1.1:
-                self.vx *= 1.0 / s
-                self.vy *= 1.0 / s
+        # Soft leash: subagents drift toward parent when too far.
+        if parent is not None:
+            dx = parent.x - self.x
+            dy = parent.y - self.y
+            dist = math.hypot(dx, dy * 2)  # rows count double visually
+            if dist > DANCER_W * 1.4:
+                pull = 0.05
+                self.vx += pull * (dx / max(1.0, dist))
+                self.vy += pull * (dy / max(1.0, dist)) * 0.5
+        # Mutual repel: nudge away from anyone too close so mascots don't pile.
+        repel_r = DANCER_W * 0.85
+        repel_strength = 0.18
+        for o in others:
+            dx = self.x - o.x
+            dy = (self.y - o.y) * 2
+            dist = math.hypot(dx, dy)
+            if 0 < dist < repel_r:
+                # Falloff: stronger as they get closer.
+                push = repel_strength * (1.0 - dist / repel_r)
+                self.vx += (dx / dist) * push
+                self.vy += (dy / dist) * push * 0.5
+        # Cap speed.
+        s = math.hypot(self.vx, self.vy * 2)
+        if s > 1.1:
+            self.vx *= 1.0 / s
+            self.vy *= 1.0 / s
         self.x += self.vx
         self.y += self.vy
         if self.x < 0:
@@ -224,11 +283,12 @@ class Dancer:
         elif self.x > w - DANCER_W:
             self.x = w - DANCER_W
             self.vx = -self.vx
+        y_max = h - DANCER_H - 1 - TAG_ROW
         if self.y < 0:
             self.y = 0
             self.vy = -self.vy
-        elif self.y > h - DANCER_H - 1:
-            self.y = h - DANCER_H - 1
+        elif self.y > y_max:
+            self.y = y_max
             self.vy = -self.vy
 
 
@@ -314,7 +374,7 @@ def main() -> int:
                 for d in dancers.values():
                     d.prev_cells = []
                     d.x = min(d.x, max(0, w - DANCER_W))
-                    d.y = min(d.y, max(0, h - DANCER_H - 1))
+                    d.y = min(d.y, max(0, h - DANCER_H - 1 - TAG_ROW))
                 last_size = (w, h)
 
             state = load_state()
@@ -343,16 +403,28 @@ def main() -> int:
             removed = [k for k in dancers if k not in required]
             removed_dancers = [dancers.pop(k) for k in removed]
 
-            # Add new dancers for newly-required keys.
-            for key in required:
+            # Add new dancers for newly-required keys. Subagents (idx > 0) spawn
+            # near their parent main so the family reads as a cluster from frame 1.
+            for key in sorted(required, key=lambda k: k[1]):  # mains first
                 if key not in dancers:
-                    dancers[key] = Dancer(key[0], key[1], w, h)
+                    sid, idx = key
+                    near = None
+                    if idx > 0:
+                        parent = dancers.get((sid, 0))
+                        if parent is not None:
+                            near = (parent.x, parent.y)
+                    dancers[key] = Dancer(sid, idx, w, h, near=near)
 
-            # Step each remaining dancer.
+            # Step each remaining dancer; subagents are leashed to their main,
+            # and everyone gently repels everyone else so they don't pile up.
+            all_dancers = list(dancers.values())
             for key, d in dancers.items():
                 sdata = active.get(d.sid, {})
                 mood = effective_mood(sdata, now)
-                d.step(w, h, frozen=(mood == "needs_you"))
+                parent = dancers.get((d.sid, 0)) if d.idx > 0 else None
+                others = [o for o in all_dancers if o is not d]
+                d.step(w, h, frozen=(mood == "needs_you"),
+                       parent=parent, others=others)
 
             # Compose frame: pass 1 erase, pass 2 draw.
             out_parts: list[str] = []
@@ -372,9 +444,13 @@ def main() -> int:
                 mood = effective_mood(sdata, now)
                 body_idx = BODY_IDX.get(mood, BODY_IDX["working"])
                 frame = pose_for(mood, tick, d.idx + d.tick_offset)
+                # Subagents render at half scale; mains at full scale.
+                scale = 2 if d.idx > 0 else 1
+                draw_w = DANCER_W // scale
+                draw_h = DANCER_H // scale
                 x_int, y_int = int(d.x), int(d.y)
                 new_cells: list[tuple[int, int, int]] = []
-                for (row_off, col_off, ansi_text, vis_w) in render_sprite_cells(frame, body_idx):
+                for (row_off, col_off, ansi_text, vis_w) in render_sprite_cells(frame, body_idx, scale=scale):
                     row = y_int + row_off + 1
                     col = x_int + col_off + 1
                     if row < 1 or row > h or col < 1:
@@ -389,6 +465,17 @@ def main() -> int:
                         continue
                     out_parts.append(cursor(row, col) + ansi_text)
                     new_cells.append((row, col, vis_w))
+                # Name tag — only on mains. Subagents inherit identity via leash
+                # to the named parent; a duplicated tag would just be noise.
+                if d.idx == 0:
+                    tag = name_for(d.sid)
+                    tag_w = visual_width(tag)
+                    tag_col = x_int + 1 + max(0, (draw_w - tag_w) // 2)
+                    tag_row = y_int + draw_h + 1
+                    if 1 <= tag_row <= h - 1 and tag_col >= 1 and tag_col + tag_w - 1 <= w:
+                        color = f"\033[38;5;{body_idx}m"
+                        out_parts.append(cursor(tag_row, tag_col) + DIM + color + tag + RESET)
+                        new_cells.append((tag_row, tag_col, tag_w))
                 d.prev_cells = new_cells
 
             # Speech bubbles — one per session with a fresh bubble.
