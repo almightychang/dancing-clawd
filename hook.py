@@ -106,6 +106,8 @@ def handle(event: dict, state: dict, now: float) -> bool:
         prompt = trunc(event.get("prompt", ""), 56)
         user = get_user_name() or "you"
         set_mood(session, "working", now, bubble=f"{user}: {prompt}" if prompt else "thinking…")
+        # New user turn → previous turn's subagents are all done or were killed.
+        session["subagent_count"] = 0
     elif name == "PreToolUse":
         tool = event.get("tool_name", "")
         ti = event.get("tool_input", {}) or {}
@@ -117,13 +119,11 @@ def handle(event: dict, state: dict, now: float) -> bool:
             bubble = f"{tool}: {hint}" if hint else tool
             set_mood(session, "tool_running", now, bubble=bubble)
     elif name == "PostToolUse":
+        # Note: PostToolUse for Agent fires at spawn-ack, NOT at completion,
+        # so it can't be used as the decrement signal. SubagentStop is.
         tool = event.get("tool_name", "")
         resp = event.get("tool_response", {}) or {}
         is_error = bool(resp.get("is_error")) if isinstance(resp, dict) else False
-        # Agent tool ending (success, error, or user-kill) is the canonical
-        # decrement signal — SubagentStop only fires on natural completion.
-        if tool in ("Task", "Agent"):
-            session["subagent_count"] = max(0, int(session.get("subagent_count", 0) or 0) - 1)
         if is_error:
             set_mood(session, "error", now, bubble=f"{tool} failed")
         else:
@@ -133,9 +133,10 @@ def handle(event: dict, state: dict, now: float) -> bool:
         set_mood(session, "needs_you", now, bubble=msg)
     elif name == "Stop":
         set_mood(session, "done", now, bubble="all done")
+        # Parent turn ended → any lingering counts (from killed subagents) clear.
+        session["subagent_count"] = 0
     elif name == "SubagentStop":
-        # Decrement happens in PostToolUse(Agent); ignore to avoid double-count.
-        pass
+        session["subagent_count"] = max(0, int(session.get("subagent_count", 0) or 0) - 1)
     else:
         return False
 
